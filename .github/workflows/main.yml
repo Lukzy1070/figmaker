@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    working-directory: FigMaker-projeto
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -40,11 +44,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: FigMaker-APK
-          path: FigMaker.apk
+          path: FigMaker-projeto/FigMaker.apk
 
       - name: Publicar em Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: FigMaker build ${{ github.run_number }}
-          files: FigMaker.apk
+          files: NOME_DA_PASTA/FigMaker.apk

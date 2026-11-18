@@ -6,22 +6,42 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+class PackInfo(val id: String, val name: String, val count: Int)
+
 object StickerStore {
     fun dir(ctx: Context) = File(ctx.filesDir, "packs")
 
-    /** Cria um pacote: sua figurinha + 2 figurinhas em branco (o WhatsApp exige mínimo de 3). */
-    fun create(ctx: Context, media: Media, webp: ByteArray): Pair<String, String> {
-        val id = "pack_" + System.currentTimeMillis()
-        val d = File(dir(ctx), id)
-        d.mkdirs()
-        File(d, "sticker_1.webp").writeBytes(webp)
-        val blank = Converter.blank(media.animated)
-        File(d, "sticker_2.webp").writeBytes(blank)
-        File(d, "sticker_3.webp").writeBytes(blank)
-        File(d, "tray.png").writeBytes(Converter.tray(media))
-        val name = "Figurinha " + SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
-        File(d, "name.txt").writeText(name)
-        if (media.animated) File(d, "animated").createNewFile()
-        return id to name
+    /**
+     * Cria os pacotes. O WhatsApp não mistura estáticas e animadas no mesmo pacote,
+     * então se houver as duas, saem 2 pacotes. Máx. 30 por pacote, mínimo 3 (completa com em branco).
+     */
+    fun createPacks(ctx: Context, built: List<Built>): List<PackInfo> {
+        val out = ArrayList<PackInfo>()
+        val stamp = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
+        val now = System.currentTimeMillis()
+
+        for (anim in listOf(false, true)) {
+            val group = built.filter { it.animated == anim }
+            if (group.isEmpty()) continue
+            val chunks = group.chunked(30)
+            chunks.forEachIndexed { ci, chunk ->
+                val id = "pack_${now}_${if (anim) "a" else "s"}$ci"
+                val d = File(dir(ctx), id)
+                d.mkdirs()
+                chunk.forEachIndexed { i, b -> File(d, "sticker_${i + 1}.webp").writeBytes(b.webp) }
+                var n = chunk.size
+                if (n < 3) {
+                    val blank = Converter.blank(anim)
+                    while (n < 3) { n++; File(d, "sticker_$n.webp").writeBytes(blank) }
+                }
+                File(d, "tray.png").writeBytes(chunk[0].tray)
+                var name = (if (anim) "Animadas " else "Figurinhas ") + stamp
+                if (chunks.size > 1) name += " (${ci + 1})"
+                File(d, "name.txt").writeText(name)
+                if (anim) File(d, "animated").createNewFile()
+                out.add(PackInfo(id, name, n))
+            }
+        }
+        return out
     }
 }

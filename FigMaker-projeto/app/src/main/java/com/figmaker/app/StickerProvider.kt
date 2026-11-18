@@ -63,7 +63,7 @@ class StickerProvider : ContentProvider() {
     private fun stickers(id: String): Cursor {
         val c = MatrixCursor(arrayOf("sticker_file_name", "sticker_emoji", "sticker_accessibility_text"))
         if (safe(id)) {
-            for (i in 1..3) {
+            for (i in 1..30) {
                 if (File(File(StickerStore.dir(context!!), id), "sticker_$i.webp").exists())
                     c.addRow(arrayOf<Any>("sticker_$i.webp", "😀", "Figurinha"))
             }

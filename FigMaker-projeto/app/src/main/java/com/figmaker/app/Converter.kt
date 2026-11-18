@@ -7,8 +7,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.RectF
 import android.media.ExifInterface
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import com.bumptech.glide.gifdecoder.GifDecoder
 import com.bumptech.glide.gifdecoder.GifHeaderParser
@@ -21,39 +21,84 @@ class Media(val frames: List<Bitmap>, val delays: List<Int>) {
     val animated: Boolean get() = frames.size > 1
 }
 
+class Built(val webp: ByteArray, val animated: Boolean, val tray: ByteArray)
+
+/** Um arquivo escolhido + o enquadramento (zoom/posição) definido pelo usuário. */
+class Item(val uri: Uri, val kind: Int, val editorBmp: Bitmap, val srcW: Int, val srcH: Int) {
+    companion object {
+        const val STATIC = 0
+        const val GIF = 1
+        const val VIDEO = 2
+    }
+
+    private val ef = editorBmp.width.toFloat() / srcW
+    private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+
+    // saída (512x512) = origem * scale + (tx, ty)   [origem em pixels do arquivo original]
+    var scale = 1f
+    var tx = 0f
+    var ty = 0f
+
+    val fitScale: Float get() = minOf(Converter.SIZE / srcW.toFloat(), Converter.SIZE / srcH.toFloat())
+    val fillScale: Float get() = maxOf(Converter.SIZE / srcW.toFloat(), Converter.SIZE / srcH.toFloat())
+
+    init { reset(true) }
+
+    fun reset(fill: Boolean) {
+        scale = if (fill) fillScale else fitScale
+        tx = (Converter.SIZE - srcW * scale) / 2f
+        ty = (Converter.SIZE - srcH * scale) / 2f
+    }
+
+    /** Desenha o resultado num quadrado de [size] pixels (usado no editor e na prévia). */
+    fun draw(canvas: Canvas, size: Float) {
+        val k = size / Converter.SIZE
+        val m = Matrix()
+        m.setScale(scale / ef, scale / ef)
+        m.postTranslate(tx, ty)
+        m.postScale(k, k)
+        canvas.save()
+        canvas.clipRect(0f, 0f, size, size)
+        canvas.drawBitmap(editorBmp, m, paint)
+        canvas.restore()
+    }
+}
+
 object Converter {
     const val SIZE = 512
     private const val MAX_FRAMES = 80
     private const val MAX_TOTAL_MS = 10_000
+    private val renderPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
-    fun load(ctx: Context, uri: Uri): Media {
+    // ---------- abrir arquivos (para o editor) ----------
+
+    fun openItem(ctx: Context, uri: Uri): Item {
+        val type = ctx.contentResolver.getType(uri) ?: ""
+        if (type.startsWith("video/")) return openVideo(ctx, uri)
         val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: throw IllegalArgumentException("Não consegui abrir o arquivo")
-        val isGif = bytes.size > 6 &&
-            bytes[0] == 'G'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[2] == 'F'.code.toByte()
-        return if (isGif) loadGif(bytes) else loadStatic(bytes)
+        return if (isGif(bytes)) openGif(uri, bytes)
+        else try { openStatic(uri, bytes) } catch (e: Exception) { openVideo(ctx, uri) }
     }
 
-    /** Encaixa a imagem em 512x512 com fundo TRANSPARENTE (sem borda branca). */
-    private fun fit(src: Bitmap): Bitmap {
-        val out = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
-        val scale = minOf(SIZE.toFloat() / src.width, SIZE.toFloat() / src.height)
-        val w = src.width * scale
-        val h = src.height * scale
-        val l = (SIZE - w) / 2f
-        val t = (SIZE - h) / 2f
-        Canvas(out).drawBitmap(
-            src, null, RectF(l, t, l + w, t + h),
-            Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-        )
-        return out
+    private fun isGif(b: ByteArray) = b.size > 6 &&
+        b[0] == 'G'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte()
+
+    private fun forEditor(src: Bitmap): Bitmap {
+        val m = maxOf(src.width, src.height)
+        return if (m > 1024) {
+            val s = 1024f / m
+            Bitmap.createScaledBitmap(
+                src, (src.width * s).toInt().coerceAtLeast(1), (src.height * s).toInt().coerceAtLeast(1), true
+            )
+        } else src.copy(Bitmap.Config.ARGB_8888, false)
     }
 
-    private fun loadStatic(bytes: ByteArray): Media {
+    private fun openStatic(uri: Uri, bytes: ByteArray): Item {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
-        while (bounds.outWidth / sample > 2048 || bounds.outHeight / sample > 2048) sample *= 2
+        while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
         var bmp = BitmapFactory.decodeByteArray(
             bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }
         ) ?: throw IllegalArgumentException("Imagem inválida")
@@ -69,10 +114,10 @@ object Converter {
             ExifInterface.ORIENTATION_ROTATE_270 -> m.postRotate(270f)
         }
         if (!m.isIdentity) bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
-        return Media(listOf(fit(bmp)), listOf(1000))
+        return Item(uri, Item.STATIC, bmp, bmp.width, bmp.height)
     }
 
-    private fun loadGif(bytes: ByteArray): Media {
+    private fun gifDecoder(bytes: ByteArray): StandardGifDecoder {
         val header = GifHeaderParser().setData(bytes).parseHeader()
         if (header.numFrames <= 0) throw IllegalArgumentException("GIF inválido")
         val provider = object : GifDecoder.BitmapProvider {
@@ -84,7 +129,50 @@ object Converter {
             override fun obtainIntArray(size: Int): IntArray = IntArray(size)
             override fun release(array: IntArray) {}
         }
-        val decoder = StandardGifDecoder(provider, header, ByteBuffer.wrap(bytes), 1)
+        return StandardGifDecoder(provider, header, ByteBuffer.wrap(bytes), 1)
+    }
+
+    private fun openGif(uri: Uri, bytes: ByteArray): Item {
+        val dec = gifDecoder(bytes)
+        dec.advance()
+        val f = dec.nextFrame ?: throw IllegalArgumentException("GIF inválido")
+        return Item(uri, Item.GIF, forEditor(f), f.width, f.height)
+    }
+
+    private fun openVideo(ctx: Context, uri: Uri): Item {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(ctx, uri)
+            val f = r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: throw IllegalArgumentException("Não consegui ler o vídeo")
+            return Item(uri, Item.VIDEO, forEditor(f), f.width, f.height)
+        } finally {
+            r.release()
+        }
+    }
+
+    // ---------- gerar os frames finais 512x512 (com o recorte do usuário) ----------
+
+    fun render(item: Item, frame: Bitmap): Bitmap {
+        val out = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
+        val k = item.srcW.toFloat() / frame.width
+        val m = Matrix()
+        m.setScale(k * item.scale, k * item.scale)
+        m.postTranslate(item.tx, item.ty)
+        Canvas(out).drawBitmap(frame, m, renderPaint)
+        return out
+    }
+
+    fun buildMedia(ctx: Context, item: Item): Media = when (item.kind) {
+        Item.STATIC -> Media(listOf(render(item, item.editorBmp)), listOf(1000))
+        Item.GIF -> gifMedia(ctx, item)
+        else -> videoMedia(ctx, item)
+    }
+
+    private fun gifMedia(ctx: Context, item: Item): Media {
+        val bytes = ctx.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
+            ?: throw IllegalArgumentException("Não consegui abrir o GIF")
+        val decoder = gifDecoder(bytes)
         val n = decoder.frameCount
         val step = (n + MAX_FRAMES - 1) / MAX_FRAMES
 
@@ -101,7 +189,7 @@ object Converter {
             if (i % step == step - 1 || i == n - 1) {
                 if (frame != null) {
                     if (total + accum > MAX_TOTAL_MS && frames.isNotEmpty()) break
-                    frames.add(fit(frame))
+                    frames.add(render(item, frame))
                     delays.add(accum)
                     total += accum
                 }
@@ -111,6 +199,33 @@ object Converter {
         if (frames.isEmpty()) throw IllegalArgumentException("Não consegui ler o GIF")
         return Media(frames, delays)
     }
+
+    private fun videoMedia(ctx: Context, item: Item): Media {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(ctx, item.uri)
+            val durMs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 3000L
+            val total = minOf(durMs, 8000L)
+            val stepMs = 100L // 10 quadros por segundo
+            val frames = ArrayList<Bitmap>()
+            val delays = ArrayList<Int>()
+            var t = 0L
+            while (t < total && frames.size < MAX_FRAMES) {
+                val f = r.getFrameAtTime(t * 1000, MediaMetadataRetriever.OPTION_CLOSEST)
+                if (f != null) {
+                    frames.add(render(item, f))
+                    delays.add(stepMs.toInt())
+                }
+                t += stepMs
+            }
+            if (frames.isEmpty()) throw IllegalArgumentException("Não consegui ler o vídeo")
+            return Media(frames, delays)
+        } finally {
+            r.release()
+        }
+    }
+
+    // ---------- encoder / limites do WhatsApp ----------
 
     private fun subsample(media: Media, step: Int): Pair<List<Bitmap>, List<Int>> {
         if (step <= 1) return media.frames to media.delays
@@ -126,7 +241,7 @@ object Converter {
         return f to d
     }
 
-    /** Gera o WebP final respeitando os limites do WhatsApp (100 KB estático, 500 KB animado). */
+    /** WebP final respeitando os limites do WhatsApp (100 KB estático, 500 KB animado). */
     fun encode(media: Media): ByteArray {
         val limit = if (media.animated) 490_000 else 98_000
         var step = 1
@@ -139,7 +254,7 @@ object Converter {
             if (!media.animated || bmps.size <= 3 || step >= 8) break
             step++
         }
-        throw IllegalStateException("Não consegui reduzir o arquivo para o limite do WhatsApp")
+        throw IllegalStateException("Arquivo grande demais para o limite do WhatsApp")
     }
 
     /** Figurinha em branco (transparente). No pacote animado precisa ter 2 frames. */
@@ -151,8 +266,8 @@ object Converter {
         return WebpEncoder.encode(arrayOf(a, b), intArrayOf(500, 500), 100, true)!!
     }
 
-    fun tray(media: Media): ByteArray {
-        val s = Bitmap.createScaledBitmap(media.frames[0], 96, 96, true)
+    fun tray(frame: Bitmap): ByteArray {
+        val s = Bitmap.createScaledBitmap(frame, 96, 96, true)
         val bos = ByteArrayOutputStream()
         s.compress(Bitmap.CompressFormat.PNG, 100, bos)
         return bos.toByteArray()

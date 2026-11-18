@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.18)
+project(figmaker)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_ANIM_UTILS OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_CWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_DWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_GIF2WEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_IMG2WEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_VWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_WEBPINFO OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_WEBPMUX OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_LIBWEBPMUX ON CACHE BOOL "" FORCE)
+
+# o workflow clona o libwebp para esta pasta
+add_subdirectory(libwebp ${CMAKE_BINARY_DIR}/libwebp EXCLUDE_FROM_ALL)
+
+add_library(figmaker SHARED webp_jni.cpp)
+target_include_directories(figmaker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/libwebp/src)
+target_link_libraries(figmaker webpmux webp jnigraphics log)

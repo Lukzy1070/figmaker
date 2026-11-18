@@ -51,4 +51,4 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: FigMaker build ${{ github.run_number }}
-          files: NOME_DA_PASTA/FigMaker.apk
+          files: FigMaker-projeto/FigMaker.apk

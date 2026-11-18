@@ -74,7 +74,7 @@ object Converter {
 
     private fun loadGif(bytes: ByteArray): Media {
         val header = GifHeaderParser().setData(bytes).parseHeader()
-        if (header.frameCount <= 0) throw IllegalArgumentException("GIF inválido")
+        if (header.numFrames <= 0) throw IllegalArgumentException("GIF inválido")
         val provider = object : GifDecoder.BitmapProvider {
             override fun obtain(width: Int, height: Int, config: Bitmap.Config): Bitmap =
                 Bitmap.createBitmap(width, height, config)

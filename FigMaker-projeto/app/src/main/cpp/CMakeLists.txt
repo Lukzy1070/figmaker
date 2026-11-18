@@ -20,4 +20,4 @@ add_subdirectory(libwebp ${CMAKE_BINARY_DIR}/libwebp EXCLUDE_FROM_ALL)
 
 add_library(figmaker SHARED webp_jni.cpp)
 target_include_directories(figmaker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/libwebp/src)
-target_link_libraries(figmaker webpmux webp jnigraphics log)
+target_link_libraries(figmaker libwebpmux webp jnigraphics log)

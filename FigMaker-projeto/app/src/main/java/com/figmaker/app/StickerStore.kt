@@ -15,10 +15,13 @@ object StickerStore {
      * Cria os pacotes. O WhatsApp não mistura estáticas e animadas no mesmo pacote,
      * então se houver as duas, saem 2 pacotes. Máx. 30 por pacote, mínimo 3 (completa com em branco).
      */
-    fun createPacks(ctx: Context, built: List<Built>): List<PackInfo> {
+    fun createPacks(ctx: Context, built: List<Built>, customName: String = "", publisher: String = ""): List<PackInfo> {
         val out = ArrayList<PackInfo>()
         val stamp = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
         val now = System.currentTimeMillis()
+        val baseName = customName.trim().take(100)
+        val owner = publisher.trim().take(100).ifEmpty { "FigMaker" }
+        val hasBoth = built.any { it.animated } && built.any { !it.animated }
 
         for (anim in listOf(false, true)) {
             val group = built.filter { it.animated == anim }
@@ -35,9 +38,12 @@ object StickerStore {
                     while (n < 3) { n++; File(d, "sticker_$n.webp").writeBytes(blank) }
                 }
                 File(d, "tray.png").writeBytes(chunk[0].tray)
-                var name = (if (anim) "Animadas " else "Figurinhas ") + stamp
+                var name = if (baseName.isNotEmpty()) {
+                    if (hasBoth) baseName + (if (anim) " (animadas)" else " (estáticas)") else baseName
+                } else (if (anim) "Animadas " else "Figurinhas ") + stamp
                 if (chunks.size > 1) name += " (${ci + 1})"
                 File(d, "name.txt").writeText(name)
+                File(d, "publisher.txt").writeText(owner)
                 if (anim) File(d, "animated").createNewFile()
                 out.add(PackInfo(id, name, n))
             }

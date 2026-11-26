@@ -5,9 +5,13 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.text.InputFilter
+import android.text.InputType
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
+import android.widget.SeekBar
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -25,6 +29,12 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var packsBox: LinearLayout
     private lateinit var createBtn: Button
+    private lateinit var nameEdit: EditText
+    private lateinit var ownerEdit: EditText
+    private lateinit var barW: SeekBar
+    private lateinit var barH: SeekBar
+    private lateinit var lblW: TextView
+    private lateinit var lblH: TextView
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -36,6 +46,64 @@ class MainActivity : Activity() {
         else
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         setOnClickListener { onClick() }
+    }
+
+    private fun field(hint: String, saved: String): EditText = EditText(this).apply {
+        this.hint = hint
+        setText(saved)
+        setSingleLine(true)
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        filters = arrayOf(InputFilter.LengthFilter(100))
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+    }
+
+    private fun progressToMul(p: Int) = 0.25f + p / 100f
+    private fun mulToProgress(m: Float) = ((m - 0.25f) * 100f).toInt().coerceIn(0, 275)
+
+    private fun stretchRow(name: String, isWidth: Boolean): Triple<LinearLayout, SeekBar, TextView> {
+        val r = row()
+        val lbl = TextView(this).apply {
+            text = "$name 100%"
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(dp(110), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val bar = SeekBar(this).apply {
+            max = 275
+            progress = 75 // 100%
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    val itm = current() ?: return
+                    val m = progressToMul(p)
+                    if (isWidth) itm.setStretch(m, itm.sy) else itm.setStretch(itm.sx, m)
+                    syncStretch(false)
+                    refresh()
+                }
+                override fun onStartTrackingTouch(s: SeekBar) {}
+                override fun onStopTrackingTouch(s: SeekBar) {}
+            })
+        }
+        r.addView(lbl)
+        r.addView(bar)
+        return Triple(r, bar, lbl)
+    }
+
+    /** Atualiza os sliders/rótulos de esticar conforme a figurinha atual. */
+    private fun syncStretch(updateBars: Boolean) {
+        val itm = items.getOrNull(cur)
+        val mw = itm?.sx ?: 1f
+        val mh = itm?.sy ?: 1f
+        lblW.text = "Largura ${(mw * 100).toInt()}%"
+        lblH.text = "Altura ${(mh * 100).toInt()}%"
+        if (updateBars) {
+            barW.progress = mulToProgress(mw)
+            barH.progress = mulToProgress(mh)
+        }
+        barW.isEnabled = itm != null
+        barH.isEnabled = itm != null
     }
 
     private fun row(): LinearLayout = LinearLayout(this).apply {
@@ -85,14 +153,22 @@ class MainActivity : Activity() {
         })
 
         val tools = row()
-        tools.addView(btn("Encaixar", 1f) { current()?.let { it.reset(false); refresh() } })
-        tools.addView(btn("Preencher", 1f) { current()?.let { it.reset(true); refresh() } })
+        tools.addView(btn("Encaixar", 1f) { current()?.let { it.reset(false); syncStretch(true); refresh() } })
+        tools.addView(btn("Preencher", 1f) { current()?.let { it.reset(true); syncStretch(true); refresh() } })
+        tools.addView(btn("Esticar", 1f) { current()?.let { it.stretchToFill(); syncStretch(true); refresh() } })
         tools.addView(btn("Fundo", 1f) {
             bgMode = (bgMode + 1) % 3
             crop.bg = bgMode; chat.bg = bgMode
             refresh()
         })
         root.addView(tools)
+
+        // sliders de esticar (largura / altura), 25% a 300%
+        val (rowW, bw, lw) = stretchRow("Largura", true)
+        val (rowH, bh, lh) = stretchRow("Altura", false)
+        barW = bw; lblW = lw; barH = bh; lblH = lh
+        root.addView(rowW)
+        root.addView(rowH)
 
         root.addView(TextView(this).apply {
             text = "Prévia na conversa (tamanho aproximado)"
@@ -102,6 +178,12 @@ class MainActivity : Activity() {
         })
         chat = ChatPreview(this).apply { layoutParams = LinearLayout.LayoutParams(side, ViewGroup.LayoutParams.WRAP_CONTENT) }
         root.addView(chat)
+
+        val prefs = getSharedPreferences("figmaker", MODE_PRIVATE)
+        nameEdit = field("Nome do pacote (opcional)", prefs.getString("pack_name", "") ?: "")
+        ownerEdit = field("Dono / autor (padrão: FigMaker)", prefs.getString("owner", "") ?: "")
+        root.addView(nameEdit)
+        root.addView(ownerEdit)
 
         createBtn = btn("Criar pacote de figurinhas") { createPacks() }
         root.addView(createBtn)
@@ -145,6 +227,7 @@ class MainActivity : Activity() {
             val tipo = when (it.kind) { Item.GIF -> "GIF"; Item.VIDEO -> "vídeo"; else -> "imagem" }
             "${cur + 1}/${items.size} · $tipo"
         }
+        syncStretch(true)
         refresh()
     }
 
@@ -222,6 +305,10 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Escolha um arquivo primeiro", Toast.LENGTH_SHORT).show()
             return
         }
+        val packName = nameEdit.text.toString().trim()
+        val owner = ownerEdit.text.toString().trim()
+        getSharedPreferences("figmaker", MODE_PRIVATE).edit()
+            .putString("pack_name", packName).putString("owner", owner).apply()
         working = true
         createBtn.isEnabled = false
         packsBox.removeAllViews()
@@ -239,7 +326,7 @@ class MainActivity : Activity() {
                     built.add(Built(webp, media.animated, Converter.tray(media.frames[0])))
                     media.frames.forEach { it.recycle() }
                 }
-                val packs = StickerStore.createPacks(this, built)
+                val packs = StickerStore.createPacks(this, built, packName, owner)
                 runOnUiThread {
                     working = false
                     createBtn.isEnabled = true

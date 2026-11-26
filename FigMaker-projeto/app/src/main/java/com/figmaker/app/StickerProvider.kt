@@ -54,8 +54,10 @@ class StickerProvider : ContentProvider() {
             if (!d.isDirectory) continue
             val nameFile = File(d, "name.txt")
             val name = if (nameFile.exists()) nameFile.readText() else id
+            val pubFile = File(d, "publisher.txt")
+            val publisher = if (pubFile.exists()) pubFile.readText().trim().ifEmpty { "FigMaker" } else "FigMaker"
             val anim = if (File(d, "animated").exists()) 1 else 0
-            c.addRow(arrayOf<Any>(id, name, "FigMaker", "tray.png", "", "", "", "", "", "", "1", 0, anim))
+            c.addRow(arrayOf<Any>(id, name, publisher, "tray.png", "", "", "", "", "", "", "1", 0, anim))
         }
         return c
     }

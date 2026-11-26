@@ -36,6 +36,9 @@ class Item(val uri: Uri, val kind: Int, val editorBmp: Bitmap, val srcW: Int, va
 
     // saída (512x512) = origem * scale + (tx, ty)   [origem em pixels do arquivo original]
     var scale = 1f
+    // esticar: multiplicadores independentes de largura/altura (1 = proporção original)
+    var sx = 1f
+    var sy = 1f
     var tx = 0f
     var ty = 0f
 
@@ -46,15 +49,36 @@ class Item(val uri: Uri, val kind: Int, val editorBmp: Bitmap, val srcW: Int, va
 
     fun reset(fill: Boolean) {
         scale = if (fill) fillScale else fitScale
+        sx = 1f
+        sy = 1f
         tx = (Converter.SIZE - srcW * scale) / 2f
         ty = (Converter.SIZE - srcH * scale) / 2f
+    }
+
+    /** Estica a mídia para cobrir os 512x512 inteiros, ignorando a proporção original. */
+    fun stretchToFill() {
+        scale = fillScale
+        sx = (Converter.SIZE / srcW.toFloat()) / scale
+        sy = (Converter.SIZE / srcH.toFloat()) / scale
+        tx = 0f
+        ty = 0f
+    }
+
+    /** Muda o esticamento mantendo o centro da mídia no mesmo lugar. */
+    fun setStretch(newSx: Float, newSy: Float) {
+        val cx = tx + srcW * scale * sx / 2f
+        val cy = ty + srcH * scale * sy / 2f
+        sx = newSx
+        sy = newSy
+        tx = cx - srcW * scale * sx / 2f
+        ty = cy - srcH * scale * sy / 2f
     }
 
     /** Desenha o resultado num quadrado de [size] pixels (usado no editor e na prévia). */
     fun draw(canvas: Canvas, size: Float) {
         val k = size / Converter.SIZE
         val m = Matrix()
-        m.setScale(scale / ef, scale / ef)
+        m.setScale(scale * sx / ef, scale * sy / ef)
         m.postTranslate(tx, ty)
         m.postScale(k, k)
         canvas.save()
@@ -157,7 +181,7 @@ object Converter {
         val out = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
         val k = item.srcW.toFloat() / frame.width
         val m = Matrix()
-        m.setScale(k * item.scale, k * item.scale)
+        m.setScale(k * item.scale * item.sx, k * item.scale * item.sy)
         m.postTranslate(item.tx, item.ty)
         Canvas(out).drawBitmap(frame, m, renderPaint)
         return out
